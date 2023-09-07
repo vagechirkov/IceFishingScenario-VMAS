@@ -184,8 +184,8 @@ class Scenario(BaseScenario):
         # get the magnitude of the velocity
         vel = torch.linalg.vector_norm(vel, dim=-1)
 
-        # replace velocity = 0 with 1 and velocity != 0 with 0 (so that the agent can only sample when it is not moving)
-        vel = (vel == 0).float()
+        # replace velocity < 1e-5 with 1 and velocity > 1e-5 with 0 (agent can only sample when it is not moving)
+        vel = (vel < 1e-5).float() + (vel != 0).float()
 
         # make sure that the probability is between 0 and 1
         v = torch.clamp(v, 0, 1)
