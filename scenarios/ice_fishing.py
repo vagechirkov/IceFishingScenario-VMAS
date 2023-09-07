@@ -19,13 +19,13 @@ class Scenario(BaseScenario):
         self.shared_rew = kwargs.get("shared_rew", True)
 
         self.comms_range = kwargs.get("comms_range", 0.0)
-        self.lidar_range = kwargs.get("lidar_range", 0.2)
+        self.lidar_range = kwargs.get("lidar_range", 0.5)
         self.agent_radius = kwargs.get("agent_radius", 0.025)
         self.xdim = kwargs.get("xdim", 1)
         self.ydim = kwargs.get("ydim", 1)
         self.grid_spacing = kwargs.get("grid_spacing", 0.05)
 
-        self.n_gaussians = kwargs.get("n_gaussians", 3)
+        self.n_gaussians = kwargs.get("n_gaussians", 2)
         self.cov = 0.05
 
         assert (self.xdim / self.grid_spacing) % 1 == 0 and (
