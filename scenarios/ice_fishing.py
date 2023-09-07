@@ -139,11 +139,12 @@ class Scenario(BaseScenario):
                 ),
                 batch_index=env_index,
             )
-            agent.sample = self.sample(agent.state.pos)
+            agent.sample = self.sample(agent.state.pos, vel=agent.state.vel, update_sampled_flag=False)
 
     def sample(
             self,
             pos,
+            vel=None,
             update_sampled_flag: bool = False,
             norm: bool = True,
     ):
@@ -163,6 +164,7 @@ class Scenario(BaseScenario):
         v = torch.stack(
             [gaussian.log_prob(pos).exp() for gaussian in self.gaussians], dim=-1
         ).sum(-1)
+
         if norm:
             v = v / self.max_pdf
 
@@ -176,10 +178,19 @@ class Scenario(BaseScenario):
                 torch.arange(self.world.batch_dim), index[:, 0], index[:, 1]
             ] = True
 
+        if vel is None:
+            return v
+
+        # get the magnitude of the velocity
+        vel = torch.linalg.vector_norm(vel, dim=-1)
+
+        # replace velocity = 0 with 1 and velocity != 0 with 0 (so that the agent can only sample when it is not moving)
+        vel = (vel == 0).float()
+
         # make sure that the probability is between 0 and 1
         v = torch.clamp(v, 0, 1)
         # return zero or one with probability p multiplied by the time step
-        return torch.bernoulli(v * self.world.dt)
+        return torch.bernoulli(v * self.world.dt * vel)
 
     def sample_single_env(
             self,
@@ -239,39 +250,11 @@ class Scenario(BaseScenario):
                     self.max_pdf = torch.maximum(self.max_pdf, sample)
 
     def reward(self, agent: Agent) -> Tensor:
-        is_first = self.world.agents.index(agent) == 0
-        if is_first:
-            for a in self.world.agents:
-                a.sample = self.sample(a.state.pos, update_sampled_flag=False)
-            self.sampling_rew = torch.stack(
-                [a.sample for a in self.world.agents], dim=-1
-            ).sum(-1)
-
-        return self.sampling_rew if self.shared_rew else agent.sample
+        agent.sample = self.sample(agent.state.pos, vel=agent.state.vel, update_sampled_flag=False)
+        return agent.sample
 
     def observation(self, agent: Agent) -> Tensor:
-        observations = [agent.state.pos, agent.state.vel, agent.sensors[0].measure()]
-
-        for delta in [
-            [self.grid_spacing, 0],
-            [-self.grid_spacing, 0],
-            [0, self.grid_spacing],
-            [0, -self.grid_spacing],
-            [-self.grid_spacing, -self.grid_spacing],
-            [self.grid_spacing, -self.grid_spacing],
-            [-self.grid_spacing, self.grid_spacing],
-            [self.grid_spacing, self.grid_spacing],
-        ]:
-            pos = agent.state.pos + torch.tensor(
-                delta,
-                device=self.world.device,
-                dtype=torch.float32,
-            )
-            sample = self.sample(
-                pos,
-                update_sampled_flag=False,
-            ).unsqueeze(-1)
-            observations.append(sample)
+        observations = [agent.state.pos, agent.state.vel, agent.sample.unsqueeze(-1), agent.sensors[0].measure()]
 
         return torch.cat(
             observations,
