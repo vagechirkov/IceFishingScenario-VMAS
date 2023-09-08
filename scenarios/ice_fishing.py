@@ -12,6 +12,8 @@ from vmas.simulator.scenario import BaseScenario
 from vmas.simulator.sensors import Lidar
 from vmas.simulator.utils import Color, X, Y
 
+from sensors.sensors import AgentDetector
+
 
 class Scenario(BaseScenario):
     def make_world(self, batch_dim: int, device: torch.device, **kwargs):
@@ -45,23 +47,14 @@ class Scenario(BaseScenario):
             x_semidim=self.xdim - self.agent_radius,
             y_semidim=self.ydim - self.agent_radius,
         )
-        entity_filter_agents: Callable[[Entity], bool] = lambda e: isinstance(e, Agent)
+
         for i in range(self.n_agents):
             agent = Agent(
                 name=f"agent {i}",
                 render_action=True,
                 collide=True,
                 shape=Sphere(radius=self.agent_radius),
-                sensors=[
-                    Lidar(
-                        world,
-                        angle_start=0.05,
-                        angle_end=2 * torch.pi + 0.05,
-                        n_rays=12,
-                        max_range=self.lidar_range,
-                        entity_filter=entity_filter_agents,
-                    ),
-                ],
+                sensors=[AgentDetector(world), ],
             )
 
             world.add_agent(agent)

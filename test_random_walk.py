@@ -23,6 +23,7 @@ if __name__ == "__main__":
         seed=None,
         # Environment specific variables
         n_agents=5,
+        n_gaussians=10,
     )
 
     n_steps = 100  # Number of steps before returning done
