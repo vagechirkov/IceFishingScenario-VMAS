@@ -140,6 +140,13 @@ class Scenario(BaseScenario):
                 device=self.world.device,
                 dtype=torch.float32,
             )
+            agent.total_catches_in_cell_history = torch.zeros(
+                (self.n_x_cells, self.n_y_cells)  # full grid
+                if env_index is not None
+                else (self.world.batch_dim, self.n_x_cells, self.n_y_cells),
+                device=self.world.device,
+                dtype=torch.float32,
+            )
             agent.time_in_cell_history = torch.zeros(
                 (self.n_x_cells, self.n_y_cells)  # full grid
                 if env_index is not None
@@ -219,9 +226,11 @@ class Scenario(BaseScenario):
     def add_sample_to_history(self, agent: Agent):
         _, index = self.pos_to_index(agent.state.pos)
         inx = torch.arange(agent.sample_history.shape[0]).type_as(index)
-        agent.time_in_cell_history[inx, index[:, X], index[:, Y]] += 1
+        agent.time_in_cell_history[inx, index[:, X], index[:, Y]] += self.world.dt
+        agent.total_catches_in_cell_history[inx, index[:, X], index[:, Y]] += agent.sample
         current_time_in_cell = agent.time_in_cell_history[inx, index[:, X], index[:, Y]]
-        agent.sample_history[inx, index[:, X], index[:, Y]] += agent.sample / current_time_in_cell
+        current_catches_in_cell = agent.total_catches_in_cell_history[inx, index[:, X], index[:, Y]]
+        agent.sample_history[inx, index[:, X], index[:, Y]] = current_catches_in_cell / current_time_in_cell
 
     def check_velocity(self, vel, threshold: float = 1e-5):
         # get the magnitude of the velocity
