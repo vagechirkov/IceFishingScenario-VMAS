@@ -307,7 +307,7 @@ class Scenario(BaseScenario):
     def agent_sample_history_for_plot(self, env_index):
         def f(x):
             _, index = self.pos_to_index(torch.tensor(x, dtype=torch.float32, device=self.world.device))
-            history = self.world.agents[0].sample_history[env_index]
+            history = torch.max(torch.stack([a.sample_history[env_index] for a in self.world.agents]), dim=0).values
 
             # if history is all zeros, add one value to the history
             if history.sum() == 0:
@@ -324,13 +324,13 @@ class Scenario(BaseScenario):
         geoms = []
 
         # Function
-        # geoms.extend(
-        #     render_function_util(
-        #         f=self.density_for_plot(env_index=env_index),
-        #         plot_range=(self.xdim, self.ydim),
-        #         cmap_alpha=self.alpha_plot,
-        #     )
-        # )
+        geoms.extend(
+            render_function_util(
+                f=self.density_for_plot(env_index=env_index),
+                plot_range=(self.xdim, self.ydim),
+                cmap_alpha=0.3,
+            )
+        )
 
         # Agent 0 history
         geoms.extend(
