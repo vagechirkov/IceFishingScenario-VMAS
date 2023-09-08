@@ -133,6 +133,21 @@ class Scenario(BaseScenario):
                 batch_index=env_index,
             )
             agent.sample = self.sample(agent.state.pos, vel=agent.state.vel, update_sampled_flag=False)
+            agent.sample_history = torch.zeros(
+                (self.n_x_cells, self.n_y_cells)  # full grid
+                if env_index is not None
+                else (self.world.batch_dim, self.n_x_cells, self.n_y_cells),
+                device=self.world.device,
+                dtype=torch.float32,
+            )
+            agent.time_in_cell_history = torch.zeros(
+                (self.n_x_cells, self.n_y_cells)  # full grid
+                if env_index is not None
+                else (self.world.batch_dim, self.n_x_cells, self.n_y_cells),
+                device=self.world.device,
+                dtype=torch.float32,
+            )
+            self.add_sample_to_history(agent)
 
     def sample(
             self,
@@ -147,38 +162,24 @@ class Scenario(BaseScenario):
                 + (pos[:, Y] < -self.ydim)
                 + (pos[:, Y] > self.ydim)
         )
-        pos[:, X].clamp_(-self.world.x_semidim, self.world.x_semidim)
-        pos[:, Y].clamp_(-self.world.y_semidim, self.world.y_semidim)
 
-        index = pos / self.grid_spacing
-        index[:, X] += self.n_x_cells / 2
-        index[:, Y] += self.n_y_cells / 2
-        index = index.to(torch.long)
-        v = torch.stack(
-            [gaussian.log_prob(pos).exp() for gaussian in self.gaussians], dim=-1
-        ).sum(-1)
+        pos, index = self.pos_to_index(pos)
+
+        v = torch.stack([gaussian.log_prob(pos).exp() for gaussian in self.gaussians], dim=-1).sum(-1)
 
         if norm:
             v = v / self.max_pdf
 
-        sampled = self.sampled[
-            torch.arange(self.world.batch_dim), index[:, 0], index[:, 1]
-        ]
-
+        # not used
+        sampled = self.sampled[torch.arange(self.world.batch_dim), index[:, 0], index[:, 1]]
         v[sampled + out_of_bounds] = 0
         if update_sampled_flag:
-            self.sampled[
-                torch.arange(self.world.batch_dim), index[:, 0], index[:, 1]
-            ] = True
+            self.sampled[torch.arange(self.world.batch_dim), index[:, 0], index[:, 1]] = True
 
         if vel is None:
             return v
 
-        # get the magnitude of the velocity
-        vel = torch.linalg.vector_norm(vel, dim=-1)
-
-        # replace velocity < 1e-5 with 1 and velocity > 1e-5 with 0 (agent can only sample when it is not moving)
-        vel = (vel < 1e-5).float() + (vel != 0).float()
+        vel = self.check_velocity(vel)
 
         # make sure that the probability is between 0 and 1
         v = torch.clamp(v, 0, 1)
@@ -199,13 +200,7 @@ class Scenario(BaseScenario):
                 + (pos[:, Y] < -self.ydim)
                 + (pos[:, Y] > self.ydim)
         )
-        pos[:, X].clamp_(-self.world.x_semidim, self.world.x_semidim)
-        pos[:, Y].clamp_(-self.world.y_semidim, self.world.y_semidim)
-
-        index = pos / self.grid_spacing
-        index[:, X] += self.n_x_cells / 2
-        index[:, Y] += self.n_y_cells / 2
-        index = index.to(torch.long)
+        pos, index = self.pos_to_index(pos)
 
         pos = pos.unsqueeze(1).expand(pos.shape[0], self.world.batch_dim, 2)
 
@@ -220,6 +215,31 @@ class Scenario(BaseScenario):
         v[sampled + out_of_bounds] = 0
 
         return v
+
+    def add_sample_to_history(self, agent: Agent):
+        _, index = self.pos_to_index(agent.state.pos)
+        inx = torch.arange(agent.sample_history.shape[0]).type_as(index)
+        agent.time_in_cell_history[inx, index[:, X], index[:, Y]] += 1
+        current_time_in_cell = agent.time_in_cell_history[inx, index[:, X], index[:, Y]]
+        agent.sample_history[inx, index[:, X], index[:, Y]] += agent.sample / current_time_in_cell
+
+    def check_velocity(self, vel, threshold: float = 1e-5):
+        # get the magnitude of the velocity
+        vel = torch.linalg.vector_norm(vel, dim=-1)
+
+        # replace velocity < threshold with 1 and velocity > 1e-5 with 0 (agent can only sample when it is not moving)
+        vel = (vel < threshold).float()
+        return vel
+
+    def pos_to_index(self, pos):
+        pos[:, X].clamp_(-self.world.x_semidim, self.world.x_semidim)
+        pos[:, Y].clamp_(-self.world.y_semidim, self.world.y_semidim)
+
+        index = pos / self.grid_spacing
+        index[:, X] += self.n_x_cells / 2
+        index[:, Y] += self.n_y_cells / 2
+        index = index.to(torch.long)
+        return pos, index
 
     def nomrlize_pdf(self, env_index: int = None):
         xpoints = torch.arange(
@@ -244,10 +264,17 @@ class Scenario(BaseScenario):
 
     def reward(self, agent: Agent) -> Tensor:
         agent.sample = self.sample(agent.state.pos, vel=agent.state.vel, update_sampled_flag=False)
+        self.add_sample_to_history(agent)
         return agent.sample
 
     def observation(self, agent: Agent) -> Tensor:
-        observations = [agent.state.pos, agent.state.vel, agent.sample.unsqueeze(-1), agent.sensors[0].measure()]
+        observations = [
+            agent.sample.unsqueeze(-1),
+            agent.state.pos,
+            agent.state.vel,
+            agent.sensors[0].measure(),
+            agent.sample_history.flatten(-2),
+        ]
 
         return torch.cat(
             observations,
@@ -268,6 +295,19 @@ class Scenario(BaseScenario):
 
         return f
 
+    def agent_sample_history_for_plot(self, env_index):
+        def f(x):
+            _, index = self.pos_to_index(torch.tensor(x, dtype=torch.float32, device=self.world.device))
+            history = self.world.agents[0].sample_history[env_index]
+
+            # if history is all zeros, add one value to the history
+            if history.sum() == 0:
+                history[0, 0] += 1e-5
+
+            return history[index[:, X], index[:, Y]]
+
+        return f
+
     def extra_render(self, env_index: int = 0):
         from vmas.simulator import rendering
         from vmas.simulator.rendering import render_function_util
@@ -275,10 +315,20 @@ class Scenario(BaseScenario):
         geoms = []
 
         # Function
+        # geoms.extend(
+        #     render_function_util(
+        #         f=self.density_for_plot(env_index=env_index),
+        #         plot_range=(self.xdim, self.ydim),
+        #         cmap_alpha=self.alpha_plot,
+        #     )
+        # )
+
+        # Agent 0 history
         geoms.extend(
             render_function_util(
-                f=self.density_for_plot(env_index=env_index),
-                plot_range=(self.xdim, self.ydim),
+                f=self.agent_sample_history_for_plot(env_index=env_index),
+                plot_range=((-self.xdim, self.xdim), (-self.ydim, self.ydim)),
+                cmap_range=(0, 1),
                 cmap_alpha=self.alpha_plot,
             )
         )
@@ -342,4 +392,4 @@ class Scenario(BaseScenario):
 if __name__ == "__main__":
     render_interactively(__file__,
                          control_two_agents=True,
-                         display_info=True)
+                         display_info=False)
